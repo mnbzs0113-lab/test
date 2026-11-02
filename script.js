@@ -27,7 +27,7 @@
     });
   }
   const grid = document.querySelector('#company-grid');
-  if (!grid) return;
+
   const companies = [
     {id:'gaon', name:'가온기술', sector:'기술', price:52400, description:'업무에 필요한 프로그램을 만드는 가상 기업입니다. 기업용 서비스 사업을 예시로 살펴봅니다.', question:'지속적으로 서비스를 이용하는 고객이 늘고 있나요?'},
     {id:'nuri', name:'누리반도체', sector:'기술', price:37800, description:'전자제품에 들어가는 부품을 설계하는 가상 기업입니다. 주문과 생산 흐름을 예시로 살펴봅니다.', question:'제품 주문량과 재고는 어떻게 달라지고 있나요?'},
@@ -46,13 +46,31 @@
   let storageAvailable = true;
   function warnStorage() {
     storageAvailable = false;
-    storageStatus.textContent = '이 브라우저에서 저장을 사용할 수 없습니다. 관심종목은 현재 화면에서만 유지됩니다. 파일로 연 경우 브라우저 설정에 따라 저장이 제한될 수 있습니다.';
+    if (storageStatus) storageStatus.textContent = '이 브라우저에서 저장을 사용할 수 없습니다. 관심종목은 현재 화면에서만 유지됩니다. 파일로 연 경우 브라우저 설정에 따라 저장이 제한될 수 있습니다.';
   }
   try {
     const raw = localStorage.getItem(storageKey);
     const stored = raw ? JSON.parse(raw) : [];
     if (Array.isArray(stored)) favorites = new Set(stored.filter(id => companies.some(company => company.id === id)));
     localStorage.setItem(storageKey, JSON.stringify([...favorites]));
+  } catch (_) { warnStorage(); }
+  const homeSummary = document.querySelector('#home-saved-summary');
+  if (homeSummary) {
+    const updateSummary = () => { homeSummary.textContent = favorites.size ? `저장한 관심 기업 ${favorites.size}개 · ${companies.filter(c => favorites.has(c.id)).map(c => c.name).join(', ')}` : '아직 저장한 기업이 없습니다. 투자 정보에서 별 버튼을 눌러 관심종목을 추가해 보세요.'; };
+    updateSummary();
+    window.addEventListener('pageshow', () => {
+      try { const data = JSON.parse(localStorage.getItem(storageKey) || '[]'); if (Array.isArray(data)) favorites = new Set(data.filter(id => companies.some(c => c.id === id))); } catch (_) {}
+      updateSummary();
+    });
+  }
+  if (!grid) return;
+  const notesKey = 'lpk-morgans-notes-v1';
+  let notes = {};
+  try {
+    const data = JSON.parse(localStorage.getItem(notesKey) || '{}');
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      companies.forEach(company => { if (typeof data[company.id] === 'string') notes[company.id] = data[company.id].slice(0, 300); });
+    }
   } catch (_) { warnStorage(); }
   savedOnly.checked = new URLSearchParams(window.location.search).get('view') === 'saved';
   function render() {
@@ -69,11 +87,56 @@
       article.className = 'company-card';
       // Values below are fixed illustrative records; user search text is never inserted as HTML.
       article.innerHTML = `<div class="company-card-header"><div class="company-symbol" aria-hidden="true">${company.name[0]}</div><div><h3>${company.name}</h3><p class="category">가상 기업 · ${company.sector}</p></div><button type="button" class="save-button" data-id="${company.id}" aria-pressed="${selected}" aria-label="${company.name} 관심종목 ${selected ? '해제' : '추가'}">${selected ? '★' : '☆'}</button></div><p class="description">${company.description}</p><div class="company-meta"><span>예시 주가</span><strong>${company.price.toLocaleString('ko-KR')}원</strong></div><div class="question-box"><h3>확인할 질문</h3><p>${company.question}</p></div><p class="source">출처: 학습용 가상 자료<br>기준일: 2026년 11월 2일 · 실제 시세 아님</p>`;
+      const chartLink = document.createElement('a');
+      chartLink.href = '#detail-chart-title'; chartLink.className = 'company-chart-link';
+      chartLink.textContent = '이 기업의 예시 차트 보기';
+      chartLink.addEventListener('click', () => { chartSelect.value = company.id; drawChart(); document.querySelector('#detail-chart-title').focus(); });
+      article.append(chartLink);
+      if (selected) {
+        const editor = document.createElement('div'); editor.className = 'note-editor';
+        const label = document.createElement('label'); label.htmlFor = `note-${company.id}`; label.textContent = '나의 관심 메모';
+        const textarea = document.createElement('textarea'); textarea.id = label.htmlFor; textarea.dataset.note = company.id; textarea.maxLength = 300; textarea.value = notes[company.id] || ''; textarea.placeholder = '관심 이유나 확인할 내용을 적어 보세요.';
+        const help = document.createElement('p'); help.className = 'note-help'; help.id = `note-help-${company.id}`; help.textContent = '최대 300자 · 이 브라우저에 자동 저장됩니다.'; textarea.setAttribute('aria-describedby', help.id);
+        if (!storageAvailable) help.textContent = '최대 300자 · 저장이 제한되어 현재 화면에서만 유지됩니다.';
+        const noteStatus = document.createElement('p'); noteStatus.className = 'note-save-status'; noteStatus.dataset.noteStatus = company.id;
+        editor.append(label,textarea,help,noteStatus); article.append(editor);
+      }
       grid.append(article);
     });
     document.querySelector('#result-count').textContent = `${matches.length}개`;
     document.querySelector('#empty-state').hidden = matches.length > 0;
   }
+  const chartSelect = document.querySelector('#chart-company');
+  let period = '1개월';
+  document.querySelector('#detail-chart-title').tabIndex = -1;
+  companies.forEach(company => {
+    const option = document.createElement('option'); option.value = company.id; option.textContent = `${company.name} · ${company.sector}`; chartSelect.append(option);
+  });
+  function drawChart() {
+    const company = companies.find(c => c.id === chartSelect.value) || companies[0];
+    const offset = companies.indexOf(company) * 3 + ['1주','1개월','3개월','1년'].indexOf(period) * 9;
+    const values = Array.from({length:40}, (_, i) => 70 + Math.sin(i * .55 + offset) * 12 + Math.cos(i * .23 + offset) * 8 + i * .6);
+    const min = Math.min(...values) - 8, max = Math.max(...values) + 8;
+    const points = values.map((v,i) => `${(20+i*760/39).toFixed(1)},${(210-(v-min)/(max-min)*180).toFixed(1)}`);
+    const line = points.map((point,i) => (i ? 'L' : 'M') + point).join(' ');
+    document.querySelector('#chart-company-name').textContent = company.name + ' · ' + period;
+    document.querySelector('#chart-price').textContent = company.price.toLocaleString('ko-KR') + '원 · 예시';
+    document.querySelector('#detail-chart').innerHTML = `<svg class="detail-chart-svg" viewBox="0 0 800 240" role="img" aria-label="${company.name} ${period} 임의 예시 차트. 실제 주가가 아닙니다."><g stroke="#dfe4ea"><path d="M20 40H780M20 95H780M20 150H780M20 205H780"/></g><path d="${line} L780 225H20Z" fill="#b28a45" fill-opacity=".12"/><path d="${line}" fill="none" stroke="#b28a45" stroke-width="3" stroke-linejoin="round"/></svg><div class="chart-axis"><span>기간 시작</span><span>${period} · 임의 값</span><span>기간 끝</span></div>`;
+  }
+  chartSelect.addEventListener('change', drawChart);
+  document.querySelectorAll('[data-period]').forEach(button => button.addEventListener('click', () => {
+    period = button.dataset.period;
+    document.querySelectorAll('[data-period]').forEach(item => { const active = item === button; item.classList.toggle('active',active); item.setAttribute('aria-pressed',String(active)); });
+    drawChart();
+  }));
+  grid.addEventListener('input', event => {
+    const textarea = event.target.closest('textarea[data-note]'); if (!textarea) return;
+    const id = textarea.dataset.note; notes[id] = textarea.value.slice(0,300);
+    if (storageAvailable) { try { localStorage.setItem(notesKey,JSON.stringify(notes)); } catch (_) { warnStorage(); } }
+    const message = storageAvailable ? '메모를 저장했습니다.' : '메모는 현재 화면에서만 유지됩니다.';
+    grid.querySelector(`[data-note-status="${id}"]`).textContent = message;
+  });
+  drawChart();
   document.querySelector('#search-form').addEventListener('submit', event => {
     event.preventDefault(); render();
     status.textContent = `검색 결과 ${grid.children.length}개입니다.`;
